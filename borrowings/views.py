@@ -3,12 +3,15 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from borrowings.models import Borrowing
-from borrowings.serializers import BorrowingSerializer, BorrowingListSerializer
+from borrowings.serializers import BorrowingSerializer, BorrowingListSerializer, BorrowingDetailSerializer
 
 from datetime import date
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.db import transaction
+
+from payments.utils import create_stripe_session
+from payments.models import Payment
 
 
 class BorrowingViewSet(viewsets.ModelViewSet):
@@ -23,7 +26,7 @@ class BorrowingViewSet(viewsets.ModelViewSet):
         is_active = self.request.query_params.get('is_active')
 
         if not self.request.user.is_staff:
-            queryset.filter(user=self.request.user)
+           queryset = queryset.filter(user=self.request.user)
 
         if self.request.user.is_staff and user_id:
             queryset = queryset.filter(user_id=int(user_id))
@@ -32,15 +35,33 @@ class BorrowingViewSet(viewsets.ModelViewSet):
             is_active_bool = is_active.lower() == "true"
             queryset = queryset.filter(actual_return_date__isnull=is_active_bool)
 
-        return queryset
+        return queryset.distinct()
 
     def get_serializer_class(self):
-        if self.action in ("list", "retrieve"):
+        if self.action == "list":
             return BorrowingListSerializer
+        if self.action == "retrieve":
+            return BorrowingDetailSerializer
         return BorrowingSerializer
 
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+        borrowing = serializer.save(user=self.request.user)
+        days = (borrowing.expected_return_date - borrowing.borrow_date).days
+        total_price = max(days, 1) * borrowing.book.daily_fee
+
+        session_url, session_id = create_stripe_session(
+            borrowing,
+            total_price,
+            self.request
+        )
+        Payment.objects.create(
+            status="PENDING",
+            type="PAYMENT",
+            borrowing=borrowing,
+            session_url=session_url,
+            session_id=session_id,
+            money_to_pay=total_price
+        )
 
     @action(detail=True, methods=['post'], url_path='return')
     def return_book(self, request, pk=None):
