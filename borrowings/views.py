@@ -3,7 +3,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from borrowings.models import Borrowing
-from borrowings.serializers import BorrowingSerializer
+from borrowings.serializers import BorrowingSerializer, BorrowingListSerializer
 
 from datetime import date
 from rest_framework.decorators import action
@@ -23,6 +23,11 @@ class BorrowingViewSet(viewsets.ModelViewSet):
         if self.request.user.is_staff:
             return queryset
         return queryset.filter(user=self.request.user)
+
+    def get_serializer_class(self):
+        if self.action in ("list", "retrieve"):
+            return BorrowingListSerializer
+        return BorrowingSerializer
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)

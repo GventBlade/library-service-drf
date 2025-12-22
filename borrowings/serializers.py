@@ -1,10 +1,14 @@
 from django.db import transaction
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
+from datetime import date
 
 from borrowings.models import Borrowing
+from books.serializers import BookSerializer
+
+
 class BorrowingSerializer(serializers.ModelSerializer):
-    book_title = serializers.CharField(source='book.title', read_only=True)
+    user = serializers.SlugRelatedField(read_only=True, slug_field="email")
 
     class Meta:
         model = Borrowing
@@ -14,29 +18,30 @@ class BorrowingSerializer(serializers.ModelSerializer):
             "expected_return_date",
             "actual_return_date",
             "book",
-            "book_title",
             "user",
         )
         read_only_fields = ("id", "borrow_date", "actual_return_date", "user")
 
     def validate(self, attrs):
-        data = super().validate(attrs)
-        book = data["book"]
-
+        book = attrs["book"]
         if book.inventory == 0:
-            raise ValidationError({"book": "This book not allow. inventory is 0."})
+            raise ValidationError({"expected_return_date": "Expected return date cannot be in the past."})
 
-        return data
+        if attrs["expected_return_date"] < date.today():
+            raise ValidationError({"expected_return_date": "Expected return date cannot be in the past."})
+
+        return attrs
 
     def create(self, validated_data):
         with transaction.atomic():
             book = validated_data["book"]
-
-            if book.inventory == 0:
-                raise ValidationError({"book": "The delivery failed, the book was simply taken away."})
             book.inventory -= 1
             book.save()
+            return super().create(validated_data)
 
-        borrowing = Borrowing.objects.create(**validated_data)
 
-        return borrowing
+class BorrowingListSerializer(BorrowingSerializer):
+    book = BookSerializer(read_only=True)
+
+    class Meta(BorrowingSerializer.Meta):
+        fields = BorrowingSerializer.Meta.fields
